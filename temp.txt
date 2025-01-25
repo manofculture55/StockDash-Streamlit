@@ -1,0 +1,143 @@
+def stock_dashboard():
+    st.header("Indian Stock Dashboard")
+
+    ticker = st.sidebar.text_input('Symbol Code', 'INFY', key="sidebar_ticker_input")
+    exchange = st.sidebar.text_input('Exchange', 'NSE', key="exchange_input")
+
+    # Fetch stock data
+    current_price, company_name = fetch_current_price_and_name(ticker, exchange)
+
+    if current_price:
+        st.subheader("Stock Details")
+        st.write(f"**Current Price of {company_name}: ₹{current_price}**")
+
+        buy_price = st.number_input("Enter Buying Price (₹)", min_value=0.0, step=0.01, value=current_price, key="buy_price_input")
+        quantity = st.number_input("Enter Quantity", min_value=1, step=1, key="quantity_input")
+
+        if st.button("Buy", key="buy_button"):
+            total_buy_price = buy_price * quantity
+
+            # Check if the stock is already in holdings
+            stock_exists = False
+            for stock in st.session_state.holding:
+                if stock['Ticker'] == ticker and stock['Exchange'] == exchange:
+                    stock_exists = True
+                    stock['Quantity'] += quantity
+                    # Calculate new average buy price (weighted average)
+                    total_quantity = stock['Quantity']
+                    avg_buy_price = ((stock['Buying Price'] * (total_quantity - quantity)) + (buy_price * quantity)) / total_quantity
+                    stock['Buying Price'] = avg_buy_price  # Update average buy price
+                    # Update total price and brokerage
+                    stock['Total Price'] = avg_buy_price * total_quantity
+                    brokerage = max(2, stock['Total Price'] * 0.001)  # Brokerage is 0.1% of total buy price, but at least ₹2
+                    stt = stock['Total Price'] * 0.001
+
+                    # Exchange charges based on exchange
+                    if exchange == 'NSE':
+                        exchange_charge = stock['Total Price'] * 0.0000297  # 0.00297% for NSE
+                    elif exchange == 'BSE':
+                        exchange_charge = stock['Total Price'] * 0.0000375  # 0.00375% for BSE
+                    else:
+                        exchange_charge = 0
+
+                    sebi_fee = stock['Total Price'] * 0.000001
+
+                    stamp_duty = stock['Total Price'] * 0.00015  # 0.015%
+
+                    # DP charges and Groww charges
+                    dp_charges = 3.5
+                    groww_charges = 15
+                    dp_and_groww_charges = dp_charges + groww_charges  # Combine the charges
+
+                    # GST on DP and Groww charges (18%)
+                    dp_groww_gst = 0.18 * dp_and_groww_charges
+
+                    # Combine DP, Groww charges and GST
+                    total_dp_and_groww_charges = dp_and_groww_charges + dp_groww_gst
+
+
+
+                    gst = 0.18 * (brokerage + exchange_charge + sebi_fee)
+
+                    stock['Brokerage'] = brokerage
+                    stock['Buying Price After Charges'] = stock['Total Price'] + (brokerage * 2)  # Add brokerage twice
+
+                    stock['Charges'] = {  # Added detailed breakdown of charges
+                        'Brokerage': brokerage,
+                        'STT': stt,
+                        'Exchange Charges': exchange_charge,
+                        'SEBI Fees': sebi_fee,
+                        'Stamp Duty': stamp_duty,
+                        'DP and Groww Charges': dp_and_groww_charges + dp_groww_gst,
+                        'GST': gst,
+                        'Total Charges': brokerage + stt + exchange_charge + sebi_fee + stamp_duty + dp_and_groww_charges + gst
+                    }
+                    stock['Date'] = str(datetime.date.today())  # Added date
+
+                    # Save updated holdings immediately
+                    save_holdings_to_file(pd.DataFrame(st.session_state.holding))
+                    st.success(f"Updated {company_name} in holdings!")
+                    break
+
+            # If the stock doesn't exist, add it as a new entry
+            if not stock_exists:
+                brokerage = max(2, min(0.001 * total_buy_price, 20))
+                stt = total_buy_price * 0.001  # STT is 0.1% of total price
+
+                if exchange == 'NSE':
+                    exchange_charge = total_buy_price * 0.0000297  # 0.00297% for NSE
+                elif exchange == 'BSE':
+                    exchange_charge = total_buy_price * 0.0000375  # 0.00375% for BSE
+                else:
+                    exchange_charge = 0  # Default case if neither NSE nor BSE
+
+                sebi_fee = total_buy_price * 0.000001
+
+                stamp_duty = total_buy_price * 0.00015  # 0.015%
+
+
+                # DP charges and Groww charges
+                dp_charges = 3.5
+                groww_charges = 15
+                dp_and_groww_charges = dp_charges + groww_charges  # Combine the charges
+
+                # GST on DP and Groww charges (18%)
+                dp_groww_gst = 0.18 * dp_and_groww_charges
+
+                # Combine DP, Groww charges and GST
+                total_dp_and_groww_charges = dp_and_groww_charges + dp_groww_gst
+
+
+                gst = 0.18 * (brokerage + exchange_charge + sebi_fee)
+
+                total_buy_price_after_charges = total_buy_price + (brokerage * 2) + (stt * 2) + (+ exchange_charge * 2) + (sebi_fee * 2) + stamp_duty + (gst * 2) + total_dp_and_groww_charges
+
+                st.session_state.holding.append({
+                    'Ticker': ticker,
+                    'Exchange': exchange,
+                    'Company Name': company_name,
+                    'Buying Price': buy_price,
+                    'Quantity': quantity,
+                    'Total Price': total_buy_price,
+                    'Buying Price After Charges': total_buy_price_after_charges,
+                    'Brokerage': brokerage,
+
+                    'Charges': {  # Added detailed breakdown of charges
+                        'Brokerage': (brokerage * 2),
+                        'STT': (stt * 2),
+                        'Exchange Charges': (exchange_charge * 2),
+                        'SEBI Fees': (sebi_fee * 2),
+                        'Stamp Duty': stamp_duty,
+                        'DP and Groww Charges': dp_and_groww_charges + dp_groww_gst,
+                        'GST': gst,
+                        'Total Charges': (brokerage * 2) + (stt * 2) + (+ exchange_charge * 2) + (sebi_fee * 2) + stamp_duty + (gst * 2) + total_dp_and_groww_charges
+                    },
+                    'Date': str(datetime.date.today())  # Added date
+                })
+
+                # Save holdings immediately
+                save_holdings_to_file(pd.DataFrame(st.session_state.holding))
+                st.success(f"{company_name} added to holdings!")
+
+    else:
+        st.error("Could not fetch stock data. Please try again.")

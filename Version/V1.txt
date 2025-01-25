@@ -1,0 +1,229 @@
+import streamlit as st
+import requests
+import pandas as pd
+from io import StringIO
+from bs4 import BeautifulSoup
+
+# Initialize session state for holding if not initialized
+if "holding" not in st.session_state:
+    st.session_state.holding = []
+
+# Define the file path for saving the data
+html_file_path = "holdings_data.html"
+
+# Function to read holdings data from the HTML file (if it exists)
+def read_holdings_from_file():
+    try:
+        with open(html_file_path, "r", encoding="utf-8") as file:
+            content = file.read()
+            return content
+    except FileNotFoundError:
+        st.warning("Holdings data file not found. Starting fresh.")
+        return None
+
+# Function to save holdings data to the HTML file
+def save_holdings_to_file(holdings_df):
+    try:
+        html_content = holdings_df.to_html(index=False)
+        with open(html_file_path, "w", encoding="utf-8") as file:
+            file.write(html_content)
+        st.success("Holdings data saved successfully!")
+    except Exception as e:
+        st.error(f"Failed to save holdings: {e}")
+
+# Function to fetch the current price and company name of a stock
+def fetch_current_price_and_name(ticker, exchange):
+    try:
+        url = f'https://www.google.com/finance/quote/{ticker}:{exchange}'
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract company name (usually in the <title> or <meta> tag)
+        title_tag = soup.find('title')
+        company_name = title_tag.text.split(' Stock Price & News')[0] if title_tag else ticker
+
+        # Extract current price
+        price_element = soup.find(class_="YMlKec fxKbKc")
+        if price_element:
+            current_price = float(price_element.text.strip()[1:].replace(",", ""))
+            return current_price, company_name
+        else:
+            raise ValueError(f"Unable to fetch price for {ticker}:{exchange}")
+    except Exception as e:
+        st.warning(f"Error fetching data for {ticker}:{exchange}: {e}")
+        return None, None
+
+# Stock Dashboard Page
+def stock_dashboard():
+    st.header("Indian Stock Dashboard")
+
+    ticker = st.sidebar.text_input('Symbol Code', 'INFY', key="sidebar_ticker_input")
+    exchange = st.sidebar.text_input('Exchange', 'NSE', key="exchange_input")
+
+    # Fetch stock data
+    current_price, company_name = fetch_current_price_and_name(ticker, exchange)
+
+    if current_price:
+        st.subheader("Stock Details")
+        st.write(f"**Current Price of {company_name}: ₹{current_price}**")
+
+        buy_price = st.number_input("Enter Buying Price (₹)", min_value=0.0, step=0.01, value=current_price, key="buy_price_input")
+        quantity = st.number_input("Enter Quantity", min_value=1, step=1, key="quantity_input")
+
+        if st.button("Buy", key="buy_button"):
+            total_buy_price = buy_price * quantity
+
+            # Check if the stock is already in holdings
+            stock_exists = False
+            for stock in st.session_state.holding:
+                if stock['Ticker'] == ticker and stock['Exchange'] == exchange:
+                    stock_exists = True
+                    stock['Quantity'] += quantity
+                    # Calculate new average buy price (weighted average)
+                    total_quantity = stock['Quantity']
+                    avg_buy_price = ((stock['Buying Price'] * (total_quantity - quantity)) + (buy_price * quantity)) / total_quantity
+                    stock['Buying Price'] = avg_buy_price  # Update average buy price
+                    # Update total price and brokerage
+                    stock['Total Price'] = avg_buy_price * total_quantity
+                    brokerage = max(2, stock['Total Price'] * 0.001)  # Brokerage is 0.1% of total buy price, but at least ₹2
+                    stock['Brokerage'] = brokerage
+                    stock['Buying Price After Charges'] = stock['Total Price'] + brokerage
+
+                    # Save updated holdings immediately
+                    save_holdings_to_file(pd.DataFrame(st.session_state.holding))
+                    st.success(f"Updated {company_name} in holdings!")
+                    break
+
+            # If the stock doesn't exist, add it as a new entry
+            if not stock_exists:
+                brokerage = max(2, total_buy_price * 0.001)  # Brokerage is 0.1% of total buy price, but at least ₹2
+                total_buy_price_after_charges = total_buy_price + brokerage
+
+                st.session_state.holding.append({
+                    'Ticker': ticker,
+                    'Exchange': exchange,
+                    'Company Name': company_name,
+                    'Buying Price': buy_price,
+                    'Quantity': quantity,
+                    'Total Price': total_buy_price,
+                    'Buying Price After Charges': total_buy_price_after_charges,
+                    'Brokerage': brokerage
+                })
+
+                # Save holdings immediately
+                save_holdings_to_file(pd.DataFrame(st.session_state.holding))
+                st.success(f"{company_name} added to holdings!")
+
+    else:
+        st.error("Could not fetch stock data. Please try again.")
+
+# Holdings Page
+def holding_page():
+    st.header("Holding")
+
+    if st.session_state.holding:
+        # Initialize the total invested amount
+        total_invested_amount = 0
+
+        # Fetch current prices and calculate returns
+        for stock in st.session_state.holding:
+            current_price, company_name = fetch_current_price_and_name(stock['Ticker'], stock.get('Exchange', 'NSE'))
+
+            stock['Current Price'] = current_price if current_price is not None else "N/A"
+            stock['Company Name'] = company_name if company_name else "N/A"
+
+            if current_price is not None:
+                total_current_value = current_price * stock['Quantity']
+                returns_value = total_current_value - stock['Buying Price After Charges']
+                returns_percentage = (returns_value / stock['Buying Price After Charges']) * 100
+                stock['Returns'] = f"₹{returns_value:,.2f} ({returns_percentage:.2f}%)"
+                stock['Returns Color'] = "green" if returns_value > 0 else "red"
+            else:
+                stock['Returns'] = "N/A"
+                stock['Returns Color'] = "black"
+
+            # Add the total invested amount for each stock
+            total_invested_amount += stock['Buying Price After Charges']
+
+        # Display total invested amount for all stocks at the top
+        st.write(f"### Total Invested Amount: ₹{total_invested_amount:,.2f}")
+
+        # Display holdings with box-like layout
+        st.write("### Current Holding")
+        for i, stock in enumerate(st.session_state.holding):
+            company_name = stock['Company Name']
+
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(
+                    f"""
+                    <style>
+                    .card {{
+                        width: 700px;
+                        height: auto;
+                        background-image: linear-gradient(163deg, #ff00ff 0%, #3700ff 100%);
+                        border-radius: 20px;
+                        transition: all .3s;
+                        margin-bottom: 15px;
+                    }}
+                    .card2 {{
+                        width: 700px;
+                        height: auto;
+                        background-color: #1a1a1a;
+                        border-radius: 20px;
+                        padding: 20px;
+                        transition: all .2s;
+                    }}
+                    .card2:hover {{
+                        transform: scale(0.99);
+                        border-radius: 20px;
+                    }}
+                    .card:hover {{
+                        box-shadow: 0px 0px 30px 1px rgba(204, 0, 255, 0.3);
+                    }}
+                    </style>
+                    <div class="card">
+                        <div class="card2">
+                            <strong style="font-size: 20px; color: white;">Company:</strong> 
+                            <span style="font-size: 20px; color: white; font-weight: bold;">{stock['Company Name']}</span><br>
+                            <strong style="color:#848884; font-size: 18px;"> Buying Price:</strong> 
+                            <span style="color:white; font-size: 18px;">₹{stock['Buying Price']:.2f}</span><br>
+                            <strong style="color:#848884; font-size: 18px;"> Buying Price After Charges:</strong> 
+                            <span style="color:white; font-size: 18px;">₹{stock['Buying Price After Charges']:.2f}</span><br>
+                            <strong style="color:#848884; font-size: 18px;"> Current Price:</strong> 
+                            <span style="color:white; font-size: 18px;">₹{stock['Current Price'] if stock['Current Price'] != "N/A" else "N/A"}</span><br>
+                            <strong style="color:#848884; font-size: 18px;"> Quantity:</strong> 
+                            <span style="color:white; font-size: 18px;">{stock['Quantity']}</span><br>
+                            <strong style="color:#848884; font-size: 18px;"> Total Invested:</strong> 
+                            <span style="color:white; font-size: 18px;">₹{stock['Buying Price After Charges']:.2f}</span><br>
+                            <strong style="font-size: 18px; color:white;"> Returns:</strong> 
+                            <span style="color:{stock['Returns Color']}; font-size: 18px; font-weight: bold;">{stock['Returns']}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            # Add Remove button
+            with col2:
+                # Remove stock from holdings and update the file
+                if st.button(f"Remove {company_name}", key=f"remove_{i}"):
+                    del st.session_state.holding[i]
+                    save_holdings_to_file(pd.DataFrame(st.session_state.holding))
+                    st.success(f"{company_name} removed from holdings!")
+
+    else:
+        st.write("No stocks added to holdings yet!")
+
+# Streamlit App Layout
+def main():
+    st.sidebar.title("Menu")
+    page = st.sidebar.radio("Select a page", ("Stock Dashboard", "Holdings"))
+
+    if page == "Stock Dashboard":
+        stock_dashboard()
+    elif page == "Holdings":
+        holding_page()
+
+if __name__ == "__main__":
+    main()
